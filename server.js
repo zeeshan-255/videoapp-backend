@@ -29,14 +29,21 @@ app.post("/creator/upload", upload.single("video"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).send("No video uploaded");
 
+    // Connect to Azure Blob Storage
     const blobServiceClient = BlobServiceClient.fromConnectionString(process.env.AZURE_STORAGE_CONNECTION);
     const containerClient = blobServiceClient.getContainerClient("videos");
 
     const blobName = Date.now() + "-" + req.file.originalname;
     const blockBlobClient = containerClient.getBlockBlobClient(blobName);
-    await blockBlobClient.uploadData(req.file.buffer);
+
+    // ✅ Set Content-Type correctly (important for streaming)
+    await blockBlobClient.uploadData(req.file.buffer, {
+      blobHTTPHeaders: { blobContentType: req.file.mimetype }
+    });
+
     const blobUrl = blockBlobClient.url;
 
+    // Save video metadata to SQL
     const pool = await sql.connect(sqlConfig);
     await pool.request()
       .input("Title", sql.NVarChar, req.body.title)
@@ -44,7 +51,7 @@ app.post("/creator/upload", upload.single("video"), async (req, res) => {
       .input("Genre", sql.NVarChar, req.body.genre)
       .input("AgeRating", sql.NVarChar, req.body.ageRating)
       .input("BlobURL", sql.NVarChar, blobUrl)
-      .input("CreatorID", sql.Int, req.body.creatorId)
+      .input("CreatorID", sql.Int, req.body.creatorId) // must exist in Users
       .query(`
         INSERT INTO Videos (Title, Publisher, Genre, AgeRating, BlobURL, CreatorID, CreatedAt)
         VALUES (@Title, @Publisher, @Genre, @AgeRating, @BlobURL, @CreatorID, GETDATE())
@@ -160,7 +167,7 @@ app.post("/users/signup", async (req, res) => {
   }
 });
 
-//  User login (fixed with case-insensitive email)
+//  User login (case-insensitive email check)
 app.post("/users/login", async (req, res) => {
   try {
     const email = req.body.email.trim();
