@@ -29,7 +29,6 @@ app.post("/creator/upload", upload.single("video"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).send("No video uploaded");
 
-    // Connect to Azure Blob Storage
     const blobServiceClient = BlobServiceClient.fromConnectionString(process.env.AZURE_STORAGE_CONNECTION);
     const containerClient = blobServiceClient.getContainerClient("videos");
 
@@ -38,7 +37,6 @@ app.post("/creator/upload", upload.single("video"), async (req, res) => {
     await blockBlobClient.uploadData(req.file.buffer);
     const blobUrl = blockBlobClient.url;
 
-    // Save video metadata to SQL
     const pool = await sql.connect(sqlConfig);
     await pool.request()
       .input("Title", sql.NVarChar, req.body.title)
@@ -46,7 +44,7 @@ app.post("/creator/upload", upload.single("video"), async (req, res) => {
       .input("Genre", sql.NVarChar, req.body.genre)
       .input("AgeRating", sql.NVarChar, req.body.ageRating)
       .input("BlobURL", sql.NVarChar, blobUrl)
-      .input("CreatorID", sql.Int, req.body.creatorId) // must exist in Users
+      .input("CreatorID", sql.Int, req.body.creatorId)
       .query(`
         INSERT INTO Videos (Title, Publisher, Genre, AgeRating, BlobURL, CreatorID, CreatedAt)
         VALUES (@Title, @Publisher, @Genre, @AgeRating, @BlobURL, @CreatorID, GETDATE())
@@ -159,6 +157,33 @@ app.post("/users/signup", async (req, res) => {
     res.json({ message: "User registered successfully" });
   } catch (err) {
     res.status(500).send("Signup failed: " + err.message);
+  }
+});
+
+//  User login (fixed with case-insensitive email)
+app.post("/users/login", async (req, res) => {
+  try {
+    const email = req.body.email.trim();
+    const passwordHash = req.body.passwordHash.trim();
+
+    const pool = await sql.connect(sqlConfig);
+    const result = await pool.request()
+      .input("Email", sql.NVarChar, email)
+      .input("PasswordHash", sql.NVarChar, passwordHash)
+      .query(`
+        SELECT * FROM Users 
+        WHERE Email COLLATE Latin1_General_CI_AS = @Email 
+          AND PasswordHash = @PasswordHash
+      `);
+
+    if (result.recordset.length === 0) {
+      return res.status(401).json({ message: "Invalid credentials" });
+    }
+
+    const user = result.recordset[0];
+    res.json({ message: "Login successful", user });
+  } catch (err) {
+    res.status(500).send("Login failed: " + err.message);
   }
 });
 
